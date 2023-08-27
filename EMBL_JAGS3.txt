@@ -1,0 +1,120 @@
+
+model{
+
+# interpolate covariates
+
+pmale ~ dunif(0,1) 
+for(i in 1:ninds){
+  ismale[i] ~ dbern(pmale)
+}
+
+for(i in 1:ninds){
+  for(t in firsts[i]:nyears){
+    isyj[i,t] <- ifelse(age[i,t]==3,1,0)
+    islj[i,t] <- ifelse(age[i,t]==4,1,0)
+  }
+  for(t in 1:(firsts[i]-1)){
+    islj[i,t] <- 0
+  }
+}
+
+# survival
+
+for(a in 1:4){
+  phi0[a] ~ dunif(0,1)
+  phi0.l[a] <- log(phi0[a]/(1-phi0[a]))
+}
+phi0[5] <- phi0[4]      # force subadult and adult survival to be equal
+phi0.l[5] <- phi0.l[4]
+
+# phi.maleeff ~ dnorm(0,0.1)
+phi.hseff ~ dnorm(0,1)
+for(i in 1:ninds){
+  for(t in firsts[i]:(nyears-1)){
+    logit(phi[i,t]) <- phi0.l[age[i,t]] + isyj[i,t]*phi.hseff*ishs[i]  # add headstart effect for juveniles...  #+ step(age[i,t]-4)*phi.maleeff*ismale[i]
+  }
+}
+
+# detection probability (probability of encountering non-telemetered individuals each year)
+
+for(a in 1:nages){    # separate baseline detection prob for all age classes
+  p0[a] ~ dunif(0,1)
+  p0.l[a] <- log(p0[a]/(1-p0[a]))
+}
+
+p.sdyr ~ dunif(0,5)     # random year effect...
+p.precyr <- pow(p.sdyr,-2)
+for(t in 1:4){
+  p.yeareff[t] ~ dnorm(0,p.precyr)
+}
+p.yeareff[5] <- -99  # no captures this year
+for(t in 6:nyears){
+  p.yeareff[t] ~ dnorm(0,p.precyr)
+}
+# p.sdind ~ dunif(0,5)
+# p.precind <- pow(p.sdind,-2)
+# for(i in 1:ninds){
+#   p.indeff[i] ~ dnorm(0,p.precind)
+#   p.indeff2[i] <- p.indeff[i]*isnative[i]
+# }
+
+p.dead ~ dunif(0,0.5)
+#p.maleeff ~ dnorm(0,1)   
+p.adfemeff ~ dnorm(0,1)   # reproductive adult females are likely to have higher detection prob
+#p.hseff ~ dnorm(0,1)  # headstarts may have different detectability even after the first couple years? (only for juvenile stage...)
+
+for(i in 1:ninds){
+  for(t in (firsts[i]+1):(nyears)){
+    logit(p[i,t]) <- p0.l[age[i,t]] + #step(age[i,t]-4)*p.maleeff*ismale[i] +   # effect of being male for subadults and adults
+                                      # isyj[i,t]*p.hseff*ishs[i] +       # effect of being headstarted after first 2 years on detection prob as young juvenile
+                                      step(age[i,t]-5)*p.adfemeff*(1-ismale[i]) +   # effect of being an adult female
+                              p.yeareff[t]        # step(age[i,t]-3)*p.indeff2[i]   # year effect (and possibly individual effect...)
+  }
+  for(t in 1:firsts[i]){
+    invp[i,t] <- 0
+  }
+}
+
+# likelihood
+
+for(i in 1:ninds){
+  alive[i,firsts[i]] ~ dbern(1)    # must be alive at first capture occasion (or upon release)
+  for(t in (firsts[i]+1):nyears){
+    palive[i,t] <- alive[i,t-1] * phi[i,t-1]    # prob of still being alive and in the study this year
+    alive[i,t] ~ dbern(palive[i,t])             # data/latent node
+    pcap[i,t] <- telem[i,t-1]*telem[i,t]*1 + (1-telem[i,t-1]*telem[i,t]) * (alive[i,t]*p[i,t] + ((1-alive[i,t])*alive[i,t-1])*p.dead  )   # account for dead captures
+    invp[i,t] <- 1/(pcap[i,t]+0.000001)  # for computing abundance using H-T...
+    y[i,t] ~ dbern(pcap[i,t])
+  } 
+  for(t in 1:(firsts[i]-1)){
+    alive[i,t] <- 0
+  }
+}
+
+# derived terms
+  # compute H-T estimate of abundance with and without headstarts?
+  
+for(i in 1:ninds){
+  isnative[i] <- 1-ishs[i]
+}
+
+for(i in 1:ninds){
+  for(t in 1:nyears){
+    totN_HSs[i,t] <- alive[i,t]*ishs[i]
+    totN_resHTs[i,t] <- y[i,t]*alive[i,t]*invp[i,t]*isnative[i]
+    totN_resKs[i,t] <- alive[i,t]*isnative[i]   # non-headstarts in study known or suspected alive
+    totN_HSljs[i,t] <- alive[i,t]*ishs[i]*fraclg[ysr[i,t]+1]
+    # totN_HSljs[i,t] <- alive[i,t]*ishs[i]*islj[i,t]  # headstarts that made it to the large juvenile stage
+    # totNs[i,t] <- y[i,t]*alive[i,t]*invp[i,t]
+  }
+}
+for(t in 1:nyears){
+  # totN[t] <- sum(totNs[1:ninds,t])
+  totN_HS[t] <- sum(totN_HSs[1:ninds,t])
+  totN_resHT[t] <- sum(totN_resHTs[1:ninds,t])
+  totN_resK[t] <- sum(totN_resKs[1:ninds,t])
+  # frac_HS[t] <- totN_HS[t]/totN[t]
+  totN_HSlj[t] <- sum(totN_HSljs[1:ninds,t])
+}
+  
+}    
